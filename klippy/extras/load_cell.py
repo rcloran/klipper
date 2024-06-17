@@ -395,7 +395,6 @@ class LoadCellSampleCollector:
         return self._collect_until(self.max_time + 1.)
 
 # Printer class that controls the load cell
-MIN_COUNTS_PER_GRAM = 1.
 class LoadCell:
     def __init__(self, config, sensor):
         self.printer = printer = config.get_printer()
@@ -407,8 +406,7 @@ class LoadCell:
         self.reference_tare_counts = config.getint('reference_tare_counts',
                                                    default=None)
         self.tare_counts = self.reference_tare_counts
-        self.counts_per_gram = config.getfloat('counts_per_gram',
-                                   minval=MIN_COUNTS_PER_GRAM, default=None)
+        self.counts_per_gram = config.getfloat('counts_per_gram', default=None)
         self.is_reversed = config.getboolean('reverse', default=False)
         self.reverse = -1 if self.is_reversed else 1
         LoadCellCommandHelper(config, self)
