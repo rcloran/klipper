@@ -3405,6 +3405,45 @@ pins:
 #   parameter must be provided.
 ```
 
+### [analog_input my_analog_input]
+
+Input pins which read an analog input. Pins configured here will be set up
+as ADC inputs during MCU configuration.
+
+```
+[analog_input]
+sensor_pin:
+#   The pin to use as an ADC input. This parameter must be provided.
+#offset:
+#scale:
+#   Numbers that determine how the raw input is transformed for use. The
+#   raw value is first normalized into the range 0 to 1 (the same range
+#   reported by QUERY_ADC), and then the formula "raw value * scale +
+#   offset" is applied. The default values are a scale of 1 and an offset
+#   of 0 so that the raw value remains unchanged.
+#unit:
+#   A text string which is not used within Klipper, but is exposed in the
+#   API so that user interfaces can express these values properly. The
+#   default is an empty string.
+#limit1:
+#limit2:
+#...
+#   A limit which can trigger the execution of gcode. The given limit is
+#   compared against the transformed value. These limits are optional, but
+#   limitN is only allowed if limitN-1 exists.
+#over_limit1_gcode:
+#under_limit1_gcode:
+#over_limit2_gcode:
+#under_limit2_gcode:
+#...
+#   A list of G-Code commands to execute when the limits are crossed.
+#   G-Code templates are supported. There is no limit to how frequently
+#   these gcode commands are run, so if your sensor's value is close to a
+#   limit and oscillating above and below it, your gcode will be called
+#   each time the value is crossed. These gcode commands are optional,
+#   but require a corresponding `limitN` option to be present.
+```
+
 ## TMC stepper driver configuration
 
 Configuration of Trinamic stepper motor drivers in UART/SPI mode.
