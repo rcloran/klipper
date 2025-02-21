@@ -357,6 +357,55 @@ class LoadCellSampleCollector:
             return self._finish_collecting()
         return self._collect_until(self.max_time + 1.)
 
+class VirtualADCPin:
+    def __init__(self, load_cell, pin_params, config):
+        self._callback = None
+        self._last_state = (0., 0.)
+        self._load_cell = load_cell
+        self._printer = config.get_printer()
+
+        if pin_params['pin'] != "channel1":
+            raise config.error('Only virtual pin "channel1" is currently supported')
+
+    def _handle_callback(self, read_time, read_value):
+        self._last_state = (read_value, read_time)
+        self._callback(read_time, scaled_val)
+    def _on_samples(self, msg):
+        if len(msg.get('data', [])) == 0:
+            return True
+
+        sample = msg['data'][-1] # [time, grams, counts, tare_counts]
+        self._last_state = (sample[2], sample[0])
+        if self._callback is not None:
+            self._callback(sample[0], sample[2])
+        return True
+    def setup_adc_callback(self, report_time, callback):
+        self._callback = callback
+        self._printer.register_event_handler("klippy:ready", self._handle_ready)
+
+    def _handle_ready(self):
+        self._load_cell.add_client(self._on_samples)
+
+    def setup_adc_sample(self, sample_time, sample_count):
+        # TODO
+        pass
+    def get_last_value(self):
+        return self._last_state
+
+class VirtualADCPinHelper:
+    def __init__(self, config, load_cell):
+        self._load_cell = load_cell
+
+        self._config = config
+        printer = config.get_printer()
+        ppins = printer.lookup_object('pins')
+        ppins.register_chip(self._load_cell.name, self)
+
+    def setup_pin(self, pin_type, pin_params):
+        if pin_type != 'adc':
+            raise self.printer.config_error("load_cell virtual ADC can only be used as an ADC pin")
+        return VirtualADCPin(self._load_cell, pin_params, self._config)
+
 # Printer class that controls the load cell
 MIN_COUNTS_PER_GRAM = 1.
 class LoadCell:
@@ -382,6 +431,8 @@ class LoadCell:
                                       "load_cell", self.name, header)
         # startup, when klippy is ready, start capturing data
         printer.register_event_handler("klippy:ready", self._handle_ready)
+
+        self._virtual_adc = VirtualADCPinHelper(config, self)
 
     def _handle_ready(self):
         self.sensor.add_client(self._sensor_data_event)
