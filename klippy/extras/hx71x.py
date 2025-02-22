@@ -4,14 +4,15 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
+import struct
 from . import bulk_sensor
 
 #
 # Constants
 #
 UPDATE_INTERVAL = 0.10
-SAMPLE_ERROR_DESYNC = -0x80000000
-SAMPLE_ERROR_LONG_READ = 0x40000000
+SAMPLE_ERROR_DESYNC = 1 << 7
+SAMPLE_ERROR_LONG_READ = 1 << 6
 
 # Implementation of HX711 and HX717
 class HX71xBase:
@@ -46,7 +47,10 @@ class HX71xBase:
         self.bulk_queue = bulk_sensor.BulkDataQueue(mcu, oid=self.oid)
         # Clock tracking
         chip_smooth = self.sps * UPDATE_INTERVAL * 2
-        self.ffreader = bulk_sensor.FixedFreqReader(mcu, chip_smooth, "<i")
+        # FFR essentially does a no-op unpack of 4 bytes
+        self.ffreader = bulk_sensor.FixedFreqReader(mcu, chip_smooth, "4s")
+        # Which this class then adds a 0 byte to to unpack val and flags
+        self.unpack_from = struct.Struct("<iB").unpack_from
         # Process messages in batches
         self.batch_bulk = bulk_sensor.BatchBulkHelper(
             self.printer, self._process_batch, self._start_measurements,
@@ -59,7 +63,7 @@ class HX71xBase:
         self.query_hx71x_cmd = None
         self.config_endstop_cmd = None
         mcu.add_config_cmd(
-            "config_hx71x oid=%d gain_channel=%d dout_pin=%s sclk_pin=%s"
+            "config_hx71x oid=%d gain_channel1=%d dout_pin=%s sclk_pin=%s"
             % (self.oid, self.gain_channel, self.dout_pin, self.sclk_pin))
         mcu.add_config_cmd("query_hx71x oid=%d rest_ticks=0"
                            % (self.oid,), on_restart=True)
@@ -98,8 +102,10 @@ class HX71xBase:
     def _convert_samples(self, samples):
         adc_factor = 1. / (1 << 23)
         count = 0
-        for ptime, val in samples:
-            if val == SAMPLE_ERROR_DESYNC or val == SAMPLE_ERROR_LONG_READ:
+        for ptime, raw_bytes in samples:
+            (val, flags) = self.unpack_from(b'\0' + raw_bytes) # "<iB"
+            val >>= 8 # We added a 0 byte as the LSB above
+            if flags & (SAMPLE_ERROR_DESYNC | SAMPLE_ERROR_LONG_READ):
                 self.last_error_count += 1
                 break  # additional errors are duplicates
             samples[count] = (round(ptime, 6), val, round(val * adc_factor, 9))

@@ -21,7 +21,7 @@ struct hx71x_adc {
     uint8_t gain_channel;   // the gain+channel selection (1-4)
     uint8_t flags;
     uint32_t rest_ticks;
-    uint32_t last_error;
+    uint8_t last_error;
     struct gpio_in dout; // pin used to receive data from the hx71x
     struct gpio_out sclk; // pin used to generate clock for the hx71x
     struct sensor_bulk sb;
@@ -33,8 +33,8 @@ enum {
 };
 
 #define BYTES_PER_SAMPLE 4
-#define SAMPLE_ERROR_DESYNC 1L << 31
-#define SAMPLE_ERROR_READ_TOO_LONG 1L << 30
+#define SAMPLE_ERROR_DESYNC 1L << 7
+#define SAMPLE_ERROR_READ_TOO_LONG 1L << 6
 
 static struct task_wake wake_hx71x;
 
@@ -130,12 +130,12 @@ hx71x_event(struct timer *timer)
 
 static void
 add_sample(struct hx71x_adc *hx71x, uint8_t oid, uint32_t counts,
-                uint8_t force_flush) {
+                uint8_t flags, uint8_t force_flush) {
     // Add measurement to buffer
     hx71x->sb.data[hx71x->sb.data_count] = counts;
     hx71x->sb.data[hx71x->sb.data_count + 1] = counts >> 8;
     hx71x->sb.data[hx71x->sb.data_count + 2] = counts >> 16;
-    hx71x->sb.data[hx71x->sb.data_count + 3] = counts >> 24;
+    hx71x->sb.data[hx71x->sb.data_count + 3] = flags;
     hx71x->sb.data_count += BYTES_PER_SAMPLE;
 
     if (hx71x->sb.data_count + BYTES_PER_SAMPLE > ARRAY_SIZE(hx71x->sb.data)
@@ -174,12 +174,10 @@ hx71x_read_adc(struct hx71x_adc *hx71x, uint8_t oid)
     }
 
     // forever send errors until reset
-    if (hx71x->last_error != 0) {
-        counts = hx71x->last_error;
-    }
+    uint8_t result_flags = hx71x->last_error;
 
     // Add measurement to buffer
-    add_sample(hx71x, oid, counts, false);
+    add_sample(hx71x, oid, counts, result_flags, false);
 
     // endstop is optional, report if enabled
     if (hx71x->last_error == 0 && hx71x->lce) {
@@ -203,7 +201,7 @@ command_config_hx71x(uint32_t *args)
     hx71x->sclk = gpio_out_setup(args[3], 0);
     gpio_out_write(hx71x->sclk, 1); // put chip in power down state
 }
-DECL_COMMAND(command_config_hx71x, "config_hx71x oid=%c gain_channel=%c"
+DECL_COMMAND(command_config_hx71x, "config_hx71x oid=%c gain_channel0=%c"
              " dout_pin=%u sclk_pin=%u");
 
 void
