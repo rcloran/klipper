@@ -73,6 +73,11 @@ class ConfigWrapper:
     def getboolean(self, option, default=sentinel, note_valid=True):
         return self._get_wrapper(self.fileconfig.getboolean, option, default,
                                  note_valid=note_valid)
+    def _parse_choice(self, option, choices, choice):
+        if choice not in choices:
+            raise error("Choice '%s' for option '%s' in section '%s' is not"
+                        " a valid choice" % (choice, option, self.section))
+        return choices[choice]
     def getchoice(self, option, choices, default=sentinel, note_valid=True):
         if type(choices) == type([]):
             choices = {i: i for i in choices}
@@ -80,10 +85,7 @@ class ConfigWrapper:
             c = self.getint(option, default, note_valid=note_valid)
         else:
             c = self.get(option, default, note_valid=note_valid)
-        if c not in choices:
-            raise error("Choice '%s' for option '%s' in section '%s'"
-                        " is not a valid choice" % (c, option, self.section))
-        return choices[c]
+        return self._parse_choice(option, choices, c)
     def getlists(self, option, default=sentinel, seps=(',',), count=None,
                  parser=str, note_valid=True):
         def lparser(value, pos):
@@ -116,6 +118,11 @@ class ConfigWrapper:
                      note_valid=True):
         return self.getlists(option, default, seps=(sep,), count=count,
                              parser=float, note_valid=note_valid)
+    def getchoicelist(self, option, choices, default, sep=',', count=None,
+                      note_valid=True):
+        return self.getlists(option, default, seps=(sep,), count=count,
+                             parser=lambda c: self._parse_choice(
+                                 option, choices, c))
     def getsection(self, section):
         return ConfigWrapper(self.printer, self.fileconfig,
                              self.access_tracking, section)
