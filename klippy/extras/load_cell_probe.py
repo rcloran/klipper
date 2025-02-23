@@ -1156,9 +1156,11 @@ class LoadCellEndstop:
         return self._helper.tapping_move(self, pos, speed)
 
     def multi_probe_begin(self):
+        self._load_cell.get_sensor().set_precise(True)
         self.multi = 'FIRST'
 
     def multi_probe_end(self):
+        self._load_cell.get_sensor().set_precise(False)
         self._raise_probe()
         self.multi = 'OFF'
 

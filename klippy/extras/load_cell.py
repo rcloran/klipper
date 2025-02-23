@@ -308,6 +308,8 @@ class LoadCellGuidedCalibrationHelper:
 # Optionally blocks execution while collecting with reactor.pause()
 # can collect a minimum n samples or collect until a specific print_time
 # samples returned in [[time],[force],[counts]] arrays for easy processing
+# Also arranges for ensuring the load cell is exclusively collecting for the
+# correct channel.
 RETRY_DELAY = 0.05  # 20Hz
 class LoadCellSampleCollector:
     def __init__(self, printer, load_cell):
@@ -330,6 +332,8 @@ class LoadCellSampleCollector:
         self._overflows += msg['overflows']
         samples = msg['data']
         for sample in samples:
+            if sample[4] != 0:  # channel 0 only
+                continue
             time = sample[0]
             if self.min_time <= time <= self.max_time:
                 self._samples.append(sample)
@@ -401,17 +405,22 @@ class VirtualADCPin:
         self._load_cell = load_cell
         self._printer = config.get_printer()
 
-        if pin_params['pin'] != "channel1":
-            raise config.error('Only virtual pin "channel1" is currently supported')
+        if pin_params['pin'] == "channel1":
+            self._channel = 0
+        elif pin_params['pin'] == "channel2":
+            self._channel = 1
+        else:
+            raise config.error('Only virtual pin "channel1" or "channel2" is supported')
 
     def _handle_callback(self, read_time, read_value):
         self._last_state = (read_value, read_time)
         self._callback(read_time, scaled_val)
     def _on_samples(self, msg):
-        if len(msg.get('data', [])) == 0:
+        samples = list(filter(lambda s: s[4] == self._channel, msg['data']))
+        if len(samples) == 0:
             return True
 
-        sample = msg['data'][-1] # [time, grams, counts, tare_counts]
+        sample = samples[-1] # [time, grams, counts, tare_counts, channel]
         self._last_state = (sample[2], sample[0])
         if self._callback is not None:
             self._callback(sample[0], sample[2])
@@ -471,6 +480,7 @@ class LoadCell:
         self._virtual_adc = VirtualADCPinHelper(config, self)
 
     def _handle_ready(self):
+        self.sensor.set_precise(False)  # Ensure we start in general purpose mode
         self.add_client(self._on_sample)
         # announce calibration status on ready
         if self.is_calibrated():
@@ -487,9 +497,9 @@ class LoadCell:
             return None
         samples = []
         for row in data:
-            # [time, grams, counts, tare_counts]
+            # [time, grams, counts, tare_counts, channel]
             samples.append([row[0], self.counts_to_grams(row[1]), row[1],
-                            self.tare_counts])
+                            self.tare_counts, row[3]])
         return {'data': samples, 'errors': errors, 'overflows': overflows}
 
     # get internal events of force data
@@ -553,6 +563,8 @@ class LoadCell:
             return True
         samples = msg['data']
         for sample in samples:
+            if sample[4] != 0:  # Only channel 0 to the force buff
+                continue
             self._force_buffer.append(sample[1])
         return True
 

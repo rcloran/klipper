@@ -18,8 +18,10 @@
 
 struct hx71x_adc {
     struct timer timer;
-    uint8_t gain_channel;   // the gain+channel selection (1-4)
+    uint8_t gain_channels[2];  // the gain+channel selection (1-4)
     uint8_t flags;
+    uint8_t precise;
+    uint8_t cur_channel_idx;
     uint32_t rest_ticks;
     uint8_t last_error;
     struct gpio_in dout; // pin used to receive data from the hx71x
@@ -149,8 +151,18 @@ hx71x_read_adc(struct hx71x_adc *hx71x, uint8_t oid)
 {
     // Read from sensor
     uint32_t start = timer_read_time();
-    uint_fast8_t gain_channel = hx71x->gain_channel;
-    uint32_t adc = hx71x_raw_read(hx71x->dout, hx71x->sclk, 24 + gain_channel);
+    uint8_t next_gain_channel = hx71x->gain_channels[hx71x->cur_channel_idx];
+    uint8_t result_flags = hx71x->cur_channel_idx;
+    if (!hx71x->precise) {
+        // The ! must be changed to a + 1 % n if > 2 channels supported
+        _Static_assert(ARRAY_SIZE(hx71x->gain_channels) == 2);
+        hx71x->cur_channel_idx = !hx71x->cur_channel_idx;
+        if (hx71x->gain_channels[hx71x->cur_channel_idx] == 0) {
+            hx71x->cur_channel_idx = 0;
+        }
+        next_gain_channel = hx71x->gain_channels[hx71x->cur_channel_idx];
+    }
+    uint32_t adc = hx71x_raw_read(hx71x->dout, hx71x->sclk, 24 + next_gain_channel);
 
     // Clear pending flag (and note if an overflow occurred)
     irq_disable();
@@ -159,12 +171,12 @@ hx71x_read_adc(struct hx71x_adc *hx71x, uint8_t oid)
     irq_enable();
 
     // Extract report from raw data
-    uint32_t counts = adc >> gain_channel;
+    uint32_t counts = adc >> next_gain_channel;
     if (counts & 0x800000)
         counts |= 0xFF000000;
 
     // Check for errors
-    uint_fast8_t extras_mask = (1 << gain_channel) - 1;
+    uint_fast8_t extras_mask = (1 << next_gain_channel) - 1;
     if ((adc & extras_mask) != extras_mask) {
         // Transfer did not complete correctly
         hx71x->last_error = SAMPLE_ERROR_DESYNC;
@@ -174,13 +186,13 @@ hx71x_read_adc(struct hx71x_adc *hx71x, uint8_t oid)
     }
 
     // forever send errors until reset
-    uint8_t result_flags = hx71x->last_error;
+    result_flags |= hx71x->last_error;
 
     // Add measurement to buffer
     add_sample(hx71x, oid, counts, result_flags, false);
 
     // endstop is optional, report if enabled
-    if (hx71x->last_error == 0 && hx71x->lce) {
+    if ((result_flags == 0) && hx71x->lce) { // no errors and channel idx 0
         load_cell_endstop_report_sample(hx71x->lce, counts, start);
     }
 }
@@ -192,17 +204,19 @@ command_config_hx71x(uint32_t *args)
     struct hx71x_adc *hx71x = oid_alloc(args[0]
                 , command_config_hx71x, sizeof(*hx71x));
     hx71x->timer.func = hx71x_event;
-    uint8_t gain_channel = args[1];
-    if (gain_channel < 1 || gain_channel > 4) {
-        shutdown("HX71x gain/channel out of range 1-4");
+    for (uint_fast8_t i = 0; i < 2; ++i) {
+        hx71x->gain_channels[i] = args[1 + i];
+        uint8_t min = i == 0;
+        if (hx71x->gain_channels[i] < min || hx71x->gain_channels[i] > 4) {
+            shutdown("HX71x gain/channel out of range 1-4");
+        }
     }
-    hx71x->gain_channel = gain_channel;
-    hx71x->dout = gpio_in_setup(args[2], 1);
-    hx71x->sclk = gpio_out_setup(args[3], 0);
+    hx71x->dout = gpio_in_setup(args[3], 1);
+    hx71x->sclk = gpio_out_setup(args[4], 0);
     gpio_out_write(hx71x->sclk, 1); // put chip in power down state
 }
 DECL_COMMAND(command_config_hx71x, "config_hx71x oid=%c gain_channel0=%c"
-             " dout_pin=%u sclk_pin=%u");
+             " gain_channel1=%c dout_pin=%u sclk_pin=%u");
 
 void
 command_attach_endstop_hx71x(uint32_t *args) {
@@ -251,6 +265,20 @@ command_query_hx71x_status(const uint32_t *args)
     sensor_bulk_status(&hx71x->sb, oid, start_t, 0, pending_bytes);
 }
 DECL_COMMAND(command_query_hx71x_status, "query_hx71x_status oid=%c");
+
+// Precise mode only queries the main gain channel
+// General purpose mode queries each channel alternately
+void
+command_set_hx71x_precise(const uint32_t *args)
+{
+    uint8_t oid = args[0];
+    uint8_t mode = args[1];
+    struct hx71x_adc *hx71x = oid_lookup(oid, command_config_hx71x);
+
+    hx71x->precise = mode;
+    hx71x->cur_channel_idx = 0;
+}
+DECL_COMMAND(command_set_hx71x_precise, "set_hx71x_precise oid=%c precise=%c");
 
 // Background task that performs measurements
 void
