@@ -214,5 +214,8 @@ class ADS1220:
                 "This may be a connection problem (e.g. faulty wiring)" % (
                     reg, hexify(register_bytes), hexify(stored_val)))
 
+    def set_precise(self, is_precise):
+        pass
+
 
 ADS1220_SENSOR_TYPE = {"ads1220": ADS1220}

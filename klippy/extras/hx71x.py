@@ -10,9 +10,11 @@ from . import bulk_sensor
 #
 # Constants
 #
-UPDATE_INTERVAL = 0.10
+UPDATE_INTERVAL_PRECISE = 0.10
+UPDATE_INTERVAL_GENERAL = 0.20
 SAMPLE_ERROR_DESYNC = 1 << 7
 SAMPLE_ERROR_LONG_READ = 1 << 6
+SAMPLE_CHANNEL = 0b0000_0011
 
 # Implementation of HX711 and HX717
 class HX71xBase:
@@ -41,12 +43,16 @@ class HX71xBase:
         self.sps = config.getchoice('sample_rate', sample_rate_options,
                                     default=default_sample_rate)
         # gain/channel choices
-        self.gain_channel = int(config.getchoice('gain', gain_options,
-                                                 default=default_gain))
+        self.gain_channels = config.getchoicelist('gain', gain_options,
+                                                  default_gain)
         ## Bulk Sensor Setup
         self.bulk_queue = bulk_sensor.BulkDataQueue(mcu, oid=self.oid)
         # Clock tracking
-        chip_smooth = self.sps * UPDATE_INTERVAL * 2
+        if len(self.gain_channels) == 1:
+            update_interval = UPDATE_INTERVAL_PRECISE
+        else:
+            update_interval = UPDATE_INTERVAL_GENERAL
+        chip_smooth = self.sps * update_interval * 2
         # FFR essentially does a no-op unpack of 4 bytes
         self.ffreader = bulk_sensor.FixedFreqReader(mcu, chip_smooth, "4s")
         # Which this class then adds a 0 byte to to unpack val and flags
@@ -54,13 +60,19 @@ class HX71xBase:
         # Process messages in batches
         self.batch_bulk = bulk_sensor.BatchBulkHelper(
             self.printer, self._process_batch, self._start_measurements,
-            self._finish_measurements, UPDATE_INTERVAL)
+            self._finish_measurements, update_interval)
         # Command Configuration
         self.query_hx71x_cmd = None
         self.config_endstop_cmd = None
         mcu.add_config_cmd(
-            "config_hx71x oid=%d gain_channel1=%d dout_pin=%s sclk_pin=%s"
-            % (self.oid, self.gain_channel, self.dout_pin, self.sclk_pin))
+            "config_hx71x oid=%d gain_channel0=%d gain_channel1=%d"
+            " dout_pin=%s sclk_pin=%s" % (
+            self.oid, self.gain_channels[0],
+            self.gain_channels[1] if len(self.gain_channels) > 1 else 0,
+            self.dout_pin, self.sclk_pin))
+        mcu.add_config_cmd("set_hx71x_precise oid=%d precise=%d"
+                           % (self.oid, int(len(self.gain_channels) == 1)),
+                           on_restart=True)
         mcu.add_config_cmd("query_hx71x oid=%d rest_ticks=0"
                            % (self.oid,), on_restart=True)
 
@@ -71,6 +83,8 @@ class HX71xBase:
             "query_hx71x oid=%c rest_ticks=%u")
         self.config_endstop_cmd = self.mcu.lookup_command(
             "attach_endstop_hx71x oid=%c load_cell_endstop_oid=%c")
+        self.set_hx71x_precise_cmd = self.mcu.lookup_command(
+            "set_hx71x_precise oid=%c precise=%c")
         self.ffreader.setup_query_command("query_hx71x_status oid=%c",
                                           oid=self.oid,
                                           cq=self.mcu.alloc_command_queue())
@@ -104,7 +118,11 @@ class HX71xBase:
             if flags & (SAMPLE_ERROR_DESYNC | SAMPLE_ERROR_LONG_READ):
                 self.last_error_count += 1
                 break  # additional errors are duplicates
-            samples[count] = (round(ptime, 6), val, round(val * adc_factor, 9))
+
+            channel = flags & SAMPLE_CHANNEL
+
+            samples[count] = (round(ptime, 6), val,
+                              round(val * adc_factor, 9), channel)
             count += 1
         del samples[count:]
 
@@ -152,6 +170,24 @@ class HX71xBase:
             self.consecutive_fails = 0
         return {'data': samples, 'errors': self.last_error_count,
                 'overflows': self.ffreader.get_last_overflows()}
+
+    def set_precise(self, is_precise):
+        if len(self.gain_channels) == 1:
+            return
+
+        # Most of the work here is in managing the FixedFreqReader, ensuring
+        # that the timestamp interpolation is reset for the new mode.
+        self._finish_measurements()
+
+        if is_precise:
+            interval = UPDATE_INTERVAL_PRECISE
+        else:
+            interval = UPDATE_INTERVAL_GENERAL
+        self.batch_bulk.batch_interval = interval
+        self.ffreader.clock_sync.chip_clock_smooth = self.sps * interval * 2
+
+        self.set_hx71x_precise_cmd.send_wait_ack([self.oid, int(is_precise)])
+        self._start_measurements()
 
 
 def HX711(config):
