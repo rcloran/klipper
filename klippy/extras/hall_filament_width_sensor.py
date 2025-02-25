@@ -14,7 +14,7 @@ class HallFilamentWidthSensor:
         self.printer = config.get_printer()
         self.reactor = self.printer.get_reactor()
         self.pin1 = config.get('adc1')
-        self.pin2 = config.get('adc2')
+        self.pin2 = config.get('adc2', None)
         self.dia1=config.getfloat('Cal_dia1', 1.5)
         self.dia2=config.getfloat('Cal_dia2', 2.0)
         self.rawdia1=config.getint('Raw_dia1', 9500)
@@ -51,9 +51,10 @@ class HallFilamentWidthSensor:
         self.mcu_adc = self.ppins.setup_pin('adc', self.pin1)
         self.mcu_adc.setup_adc_sample(ADC_SAMPLE_TIME, ADC_SAMPLE_COUNT)
         self.mcu_adc.setup_adc_callback(ADC_REPORT_TIME, self.adc_callback)
-        self.mcu_adc2 = self.ppins.setup_pin('adc', self.pin2)
-        self.mcu_adc2.setup_adc_sample(ADC_SAMPLE_TIME, ADC_SAMPLE_COUNT)
-        self.mcu_adc2.setup_adc_callback(ADC_REPORT_TIME, self.adc2_callback)
+        if self.pin2:
+            self.mcu_adc2 = self.ppins.setup_pin('adc', self.pin2)
+            self.mcu_adc2.setup_adc_sample(ADC_SAMPLE_TIME, ADC_SAMPLE_COUNT)
+            self.mcu_adc2.setup_adc_callback(ADC_REPORT_TIME, self.adc2_callback)
         # extrude factor updating
         self.extrude_factor_update_timer = self.reactor.register_timer(
             self.extrude_factor_update_event)
@@ -86,6 +87,12 @@ class HallFilamentWidthSensor:
     def adc_callback(self, read_time, read_value):
         # read sensor value
         self.lastFilamentWidthReading = round(read_value * 10000)
+        if self.pin2 is None:
+            diameter_new = round((self.dia2 - self.dia1)/
+                (self.rawdia2-self.rawdia1)*
+              (self.lastFilamentWidthReading
+               -self.rawdia1)+self.dia1,2)
+            self.diameter=(5.0 * self.diameter + diameter_new)/6
 
     def adc2_callback(self, read_time, read_value):
         # read sensor value
