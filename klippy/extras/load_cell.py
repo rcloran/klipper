@@ -67,21 +67,21 @@ class LoadCellCommandHelper:
     def register_commands(self, name):
         # Register commands
         gcode = self.printer.lookup_object('gcode')
-        gcode.register_mux_command("TARE_LOAD_CELL", "LOAD_CELL", name,
-                                   self.cmd_TARE_LOAD_CELL,
-                                   desc=self.cmd_TARE_LOAD_CELL_help)
-        gcode.register_mux_command("CALIBRATE_LOAD_CELL", "LOAD_CELL", name,
-                                   self.cmd_CALIBRATE_LOAD_CELL,
+        gcode.register_mux_command("LOAD_CELL_TARE", "LOAD_CELL", name,
+                                   self.cmd_LOAD_CELL_TARE,
+                                   desc=self.cmd_LOAD_CELL_TARE_help)
+        gcode.register_mux_command("LOAD_CELL_CALIBRATE", "LOAD_CELL", name,
+                                   self.cmd_LOAD_CELL_CALIBRATE,
                                    desc=self.cmd_CALIBRATE_LOAD_CELL_help)
-        gcode.register_mux_command("READ_LOAD_CELL", "LOAD_CELL", name,
-                                   self.cmd_READ_LOAD_CELL,
-                                   desc=self.cmd_READ_LOAD_CELL_help)
+        gcode.register_mux_command("LOAD_CELL_READ", "LOAD_CELL", name,
+                                   self.cmd_LOAD_CELL_READ,
+                                   desc=self.cmd_LOAD_CELL_READ_help)
         gcode.register_mux_command("LOAD_CELL_DIAGNOSTIC", "LOAD_CELL", name,
                                    self.cmd_LOAD_CELL_DIAGNOSTIC,
                                    desc=self.cmd_LOAD_CELL_DIAGNOSTIC_help)
 
-    cmd_TARE_LOAD_CELL_help = "Set the Zero point of the load cell"
-    def cmd_TARE_LOAD_CELL(self, gcmd):
+    cmd_LOAD_CELL_TARE_help = "Set the Zero point of the load cell"
+    def cmd_LOAD_CELL_TARE(self, gcmd):
         tare_counts = self.load_cell.avg_counts()
         self.load_cell.tare(tare_counts)
         tare_percent = self.load_cell.counts_to_percent(tare_counts)
@@ -89,11 +89,11 @@ class LoadCellCommandHelper:
                           % (tare_percent, tare_counts))
 
     cmd_CALIBRATE_LOAD_CELL_help = "Start interactive calibration tool"
-    def cmd_CALIBRATE_LOAD_CELL(self, gcmd):
+    def cmd_LOAD_CELL_CALIBRATE(self, gcmd):
         LoadCellGuidedCalibrationHelper(self.printer, self.load_cell)
 
-    cmd_READ_LOAD_CELL_help = "Take a reading from the load cell"
-    def cmd_READ_LOAD_CELL(self, gcmd):
+    cmd_LOAD_CELL_READ_help = "Take a reading from the load cell"
+    def cmd_LOAD_CELL_READ(self, gcmd):
         counts = self.load_cell.avg_counts()
         percent = self.load_cell.counts_to_percent(counts)
         force = self.load_cell.counts_to_grams(counts)
