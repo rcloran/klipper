@@ -28,7 +28,7 @@ works with `safety_limit_grams` to limit the maximum force on the toolhead.
 the load_cell_endstop sees this force it will shut down the machine.
 Klipper does not retract the probe when doing a single `PROBE`. This can result
 in force applied to the toolhead at the end of a probing cycle. If you repeat
-the `PROBE` command, load_cell_probe will tear the endstop at the current force.
+the `PROBE` command, load_cell_probe will tare the endstop at the current force.
 Multiple cycles of this could result in ever-increasing force on the toolhead.
 `safety_limit_grams` stops this cycle from running out of control. If this limit
 is violated the resulting error is `!! Load cell endstop: too much force!`.
@@ -38,9 +38,9 @@ contact. In the load_cell_probe this defaults to 1, meaning no debouncing.
 Because load cells are analog devices being measured by an ADC they
 don't generally need to be debounced.
 * `trigger_force_grams`: this is the force in grams that triggers the endstop to
-halt the homing move. When a homing move starts the endstop tears itself with
+halt the homing move. When a homing move starts the endstop tares itself with
 the current reading from the load cell. `trigger_force_grams` is an absolute
-delta from the tear value. There is always some overshoot of this value, so be
+delta from the tare value. There is always some overshoot of this value, so be
 conservative. e.g. a setting of 100g may result in 350g of peak force before the
 toolhead stops. This overshoot will increase with a low sample rate and/or
 [multi MCU homing](Multi_MCU_Homing.md).
@@ -179,10 +179,10 @@ sensor=extruder
 max_z_adjustment: 0.1
 ```
 
-## Continuous Tear Filters for Toolhead Load Cells
+## Continuous Tare Filters for Toolhead Load Cells
 
 Klipper implements a configurable IIR filter on the MCU to provide continuous
-tearing of the load cell while probing. Continuous tearing means the 0 value
+taring of the load cell while probing. Continuous taring means the 0 value
 moves with drift caused by external factors like bowden tubes and thermal
 changes. This is aimed at toolhead sensors and moving beds that experience lots
 of external forces that change while probing.
