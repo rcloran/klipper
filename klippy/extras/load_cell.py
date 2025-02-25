@@ -7,7 +7,7 @@
 from . import hx71x
 from . import ads1220
 from .bulk_sensor import BatchWebhooksClient
-import logging, collections, itertools
+import collections, itertools
 # We want either Python 3's zip() or Python 2's izip() but NOT 2's zip():
 zip_impl = zip
 try:
@@ -15,8 +15,15 @@ try:
 except ImportError: # will be Python 3.x
     pass
 
-# Helper for event driven webhooks (i.e. non polling based data source)
-class WebhooksHelper(object):
+# alternative to numpy's column selection:
+def select_column(data, column_idx):
+    return list(zip_impl(*data))[column_idx]
+
+def avg(data):
+    return sum(data) / len(data)
+
+# Helper for event driven webhooks and subscription based API clients
+class ApiClientHelper(object):
     def __init__(self, printer):
         self.printer = printer
         self.client_cbs = []
@@ -30,65 +37,21 @@ class WebhooksHelper(object):
                 # This client no longer needs updates - unregister it
                 self.client_cbs.remove(client_cb)
 
-    # Client registration
+    # Add a client that gets data callbacks
     def add_client(self, client_cb):
         self.client_cbs.append(client_cb)
 
-    # Webhooks registration
-    def _add_api_client(self, web_request):
+    # Add Webhooks client and send header
+    def _add_webhooks_client(self, web_request):
         whbatch = BatchWebhooksClient(web_request)
         self.add_client(whbatch.handle_batch)
         web_request.send(self.webhooks_start_resp)
 
+    # Set up a webhooks endpoint with a static header
     def add_mux_endpoint(self, path, key, value, webhooks_start_resp):
         self.webhooks_start_resp = webhooks_start_resp
         wh = self.printer.lookup_object('webhooks')
-        wh.register_mux_endpoint(path, key, value, self._add_api_client)
-
-# Adapter for WebhooksHelper that transforms the response using a function
-# Anything that implements the add_client contract can be a message source
-# Outputs to its own clients
-class WebhooksTransformer(WebhooksHelper):
-    def __init__(self, printer, msg_source, transform_fn):
-        super(WebhooksTransformer, self).__init__(printer)
-        self.msg_source = msg_source
-        self.transform_fn = transform_fn
-        self.is_started = False
-
-    def _start(self):
-        if self.is_started:
-            return
-        self.is_started = True
-        self.msg_source.add_client(self._transform_batch)
-
-    def _stop(self):
-        self.is_started = False
-        del self.client_cbs[:]
-
-    def _transform_batch(self, msg):
-        try:
-            msg_transformed = self.transform_fn(msg)
-        except self.printer.command_error:
-            logging.exception("BatchBulkTransformer transform_batch error")
-            self._stop()
-            return self.is_started
-        if not msg_transformed:
-            return self.is_started
-        self.send(msg_transformed)
-        if len(self.client_cbs) == 0:
-            self._stop()
-        return self.is_started
-
-    def add_client(self, client_cb):
-        self.client_cbs.append(client_cb)
-        self._start()
-
-# alternative to numpy's column selection:
-def select_column(data, column_idx):
-    return list(zip_impl(*data))[column_idx]
-
-def avg(data):
-    return sum(data) / len(data)
+        wh.register_mux_endpoint(path, key, value, self._add_webhooks_client)
 
 # Class for handling commands related ot load cells
 class LoadCellCommandHelper:
@@ -120,8 +83,8 @@ class LoadCellCommandHelper:
     cmd_TARE_LOAD_CELL_help = "Set the Zero point of the load cell"
     def cmd_TARE_LOAD_CELL(self, gcmd):
         tare_counts = self.load_cell.avg_counts()
-        tare_percent = self.load_cell.counts_to_percent(tare_counts)
         self.load_cell.tare(tare_counts)
+        tare_percent = self.load_cell.counts_to_percent(tare_counts)
         gcmd.respond_info("Load cell tare value: %.2f%% (%i)"
                           % (tare_percent, tare_counts))
 
@@ -397,17 +360,17 @@ class LoadCell:
         self.is_reversed = config.getboolean('reverse', default=False)
         self.reverse = -1 if self.is_reversed else 1
         LoadCellCommandHelper(config, self)
-        # webhooks support
-        self.wh_transformer = WebhooksTransformer(printer, sensor,
-                                                  self._sensor_data_event)
+        # Client support:
+        self.clients = ApiClientHelper(printer)
         header = {"header": ["time", "force (g)", "counts", "tare_counts"]}
-        self.wh_transformer.add_mux_endpoint("load_cell/dump_force",
-                                             "load_cell", self.name, header)
+        self.clients.add_mux_endpoint("load_cell/dump_force",
+                                      "load_cell", self.name, header)
         # startup, when klippy is ready, start capturing data
         printer.register_event_handler("klippy:ready", self._handle_ready)
 
     def _handle_ready(self):
-        self.add_client(self._on_sample)
+        self.sensor.add_client(self._sensor_data_event)
+        self.add_client(self._track_force)
         # announce calibration status on ready
         if self.is_calibrated():
             self.printer.send_event("load_cell:calibrate", self)
@@ -424,11 +387,13 @@ class LoadCell:
             # [time, grams, counts, tare_counts]
             samples.append([row[0], self.counts_to_grams(row[1]), row[1],
                             self.tare_counts])
-        return {'data': samples}
+        msg = {'data': samples}
+        self.clients.send(msg)
+        return True
 
     # get internal events of force data
     def add_client(self, callback):
-        self.wh_transformer.add_client(callback)
+        self.clients.add_client(callback)
 
     def tare(self, tare_counts):
         self.tare_counts = int(tare_counts)
@@ -478,10 +443,12 @@ class LoadCell:
                     "Some samples are saturated (+/-100%)")
         return avg(select_column(samples, 2))
 
-    def _on_sample(self, msg):
+    # Provide ongoing force tracking/averaging for status updates
+    def _track_force(self, msg):
         if not (self.is_calibrated() and self.is_tared()):
             return True
         samples = msg['data']
+        # selectColumn unusable here because Python 2 lacks deque.extend
         for sample in samples:
             self._force_buffer.append(sample[1])
         return True
