@@ -500,10 +500,10 @@ class TapAnalysis(object):
             raise ValidationError(TOO_MANY_PROBING_MOVES)
 
         self.home_end_time = self._recalculate_homing_end()
-        self.pullback_start_time = self.moves[3].print_time
-        self.pullback_end_time = (self.moves[5].print_time
-                                  + self.moves[5].move_t)
-        self.pullback_cruise_time = self.moves[4].print_time
+        self.pullback_start_time = self.moves[-3].print_time
+        self.pullback_end_time = (self.moves[-1].print_time
+                                  + self.moves[-1].move_t)
+        self.pullback_cruise_time = self.moves[-2].print_time
         self.pullback_duration = (self.pullback_end_time -
                                   self.pullback_start_time)
         self.position = self._extract_pos_history()
