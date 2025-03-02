@@ -637,6 +637,8 @@ class LoadCellProbeSessionHelper:
         # Configurable probing speeds
         self.speed = config.getfloat('speed', 5.0, above=0.)
         self.lift_speed = config.getfloat('lift_speed', self.speed, above=0.)
+        self.reposition_speed = config.getfloat('reposition_speed',
+                                                self.speed, above=0.)
         # Multi-sample support (for improved accuracy)
         self.sample_count = config.getint('samples', 1, minval=1)
         self.sample_retract_dist = config.getfloat('sample_retract_dist', 2.,
@@ -735,6 +737,10 @@ class LoadCellProbeSessionHelper:
         if 'z' not in toolhead.get_status(curtime)['homed_axes']:
             raise self.printer.command_error("Must home before probe")
         pos = toolhead.get_position()
+        if pos[2] > self.sample_retract_dist * 2:
+            # Allow a fast move to retract_dist if the head is far away
+            pos[2] = self.sample_retract_dist
+            toolhead.manual_move(pos, self.reposition_speed)
         pos[2] = self.z_position
         try:
             epos, is_good = self.mcu_probe.tapping_move(pos, speed)
