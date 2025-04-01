@@ -279,33 +279,6 @@ class ForceGraph:
                         l5.find_force(self.time[pullback_end_idx]))
         return [p0, p1, p2, p3, p4, p5], [l1, l2, l3, l4, l5]
 
-# calculate variance between a ForceLine and a region of force data
-def segment_variance(force, time, start, end, line):
-    import numpy as np
-    mean = np.average(force[start:end])
-    total_var = 0
-    delta_var = 0
-    for i in range(start, end):
-        load = force[i]
-        instant = time[i]
-        total_var += pow(load - mean, 2)
-        delta_var += pow(line.find_force(instant) - load, 2)
-    return total_var, delta_var
-
-# decide how well the ForceLines predict force near an elbow
-# bad predictions == blunt elbow, good predictions == sharp elbow
-def elbow_r_squared(force, time, elbow_idx, widths, left_line, right_line):
-    r_squared = []
-    for width in widths:
-        l_tv, l_dv = segment_variance(force, time,
-                                elbow_idx - width, elbow_idx, left_line)
-        r_tv, r_dv = segment_variance(force, time,
-                                elbow_idx, elbow_idx + width, right_line)
-        r2 = 1 - ((l_dv + r_dv) / (l_tv + r_tv))
-        # returns r squared as a percentage. -350% is bad. 80% is good!
-        r_squared.append(round((float(r2) * 100.), 1))
-    return r_squared
-
 class ValidationError(Exception):
     def __init__(self, error_tuple):
         self.error_code = error_tuple[0]
@@ -471,7 +444,6 @@ class TapAnalysis(object):
         self.r_squared_widths = [int((n * 0.01) // self.sample_time)
                                  for n in range(2, 7)]
         self.validate_elbow_clearance()
-        self.tap_r_squared = self.calculate_r_squared()
         self.is_valid = True
 
     # validate that a set of ForcePoint objects are in chronological order
@@ -514,15 +486,6 @@ class TapAnalysis(object):
         l1, l2, l3, l4, l5 = self.tap_lines
         return [l1.angle(l2), l2.angle(l3), l3.angle(l4), l4.angle(l5)]
 
-    def calculate_r_squared(self):
-        r_squared = []
-        for i, elbow in enumerate(self.tap_points[1: -1]):
-            elbow_idx = self.force_graph.index_near(elbow.time)
-            r_squared.append(elbow_r_squared(self.force, self.time, elbow_idx,
-                            self.r_squared_widths,
-                            self.tap_lines[i], self.tap_lines[i + 1]))
-        return r_squared
-
     # convert to dictionary for JSON encoder
     def to_dict(self):
         return {
@@ -537,7 +500,6 @@ class TapAnalysis(object):
             'pullback_start_time': self.pullback_start_time,
             'pullback_end_time': self.pullback_end_time,
             'tap_angles': self.tap_angles,
-            'tap_r_squared': self.tap_r_squared,
             'elapsed': self.elapsed,
             'is_valid': self.is_valid,
             'errors': self.errors,
