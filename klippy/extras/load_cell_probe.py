@@ -10,9 +10,9 @@ from . import probe, sos_filter, load_cell, hx71x, ads1220
 
 ######## Types
 
-class BadTapModule(object):
-    def is_bad_tap(self, tap_analysis):
-        return False
+class TapClassifierModule(object):
+    def classify(self, tap_analysis):
+        pass
 
 class NozzleCleanerModule(object):
     def clean_nozzle(self):
@@ -529,8 +529,8 @@ class TapAnalysis(object):
             'time': self.time.tolist(),
             'force': self.force.tolist(),
             'position': self.position,
-            'points': [point.to_dict() for point in self.tap_points],
-            'lines': [line.to_dict() for line in self.tap_lines],
+            'tap_points': [point.to_dict() for point in self.tap_points],
+            'tap_lines': [line.to_dict() for line in self.tap_lines],
             'tap_pos': self.tap_pos,
             'moves': [move.to_dict() for move in self.moves],
             'home_end_time': self.home_end_time,
@@ -756,8 +756,8 @@ class ProbeSessionContext:
         self.pullback_speed = config.getfloat('pullback_speed', minval=0.1,
                                               maxval=10.0,
                                               default=default_pullback_speed)
-        self.bad_tap_module = self.load_module(config, 'bad_tap_module',
-                                               BadTapModule())
+        self.tap_classifier_module = self.load_module(config,
+                              'tap_classifier_module', TapClassifierModule())
         # webhooks support
         self.clients = load_cell.ApiClientHelper(printer)
         name = config.get_name()
@@ -801,14 +801,15 @@ class ProbeSessionContext:
         self.collector = None
         ppa = TapAnalysis(self.printer, samples)
         ppa.analyze()  # TODO: do this on a thread and return the lambda
+        # allow the TapClassifier to override TapAnalysis result
+        self.tap_classifier_module.classify(ppa)
         # broadcast tap event data:
         self.clients.send({'tap': ppa.to_dict()})
-        is_good = ppa.is_valid and not self.bad_tap_module.is_bad_tap(ppa)
-        if is_good:
+        if ppa.is_valid:
             epos[2] = ppa.tap_pos[2]
         else:
             epos = pullback_end_pos[:3]
-        return epos, is_good
+        return epos, ppa.is_valid
 
 
 WATCHDOG_MAX = 3
