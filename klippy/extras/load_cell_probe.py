@@ -696,6 +696,7 @@ class LoadCellProbeSessionHelper:
         # Calculate result
         epos = probe.calc_probe_z_average(positions, params['samples_result'])
         self.results.append(epos)
+
     def pull_probed_results(self):
         res = self.results
         self.results = []
@@ -806,6 +807,7 @@ class LoadCellEndstop:
         # internal tare tracking
         self.tare_counts = 0
         self.last_trigger_time = 0
+        self.last_tap_is_valid = False
         self._position_endstop = config.getfloat('z_offset')
         # triggering options
         self.trigger_force_grams = config.getint('trigger_force',
@@ -890,7 +892,8 @@ class LoadCellEndstop:
     def get_status(self, eventtime):
         return {
             'endstop_tare_counts': self.tare_counts,
-            'last_trigger_time': self.last_trigger_time
+            'last_trigger_time': self.last_trigger_time,
+            'last_tap_is_valid': self.last_tap_is_valid
         }
 
     def _get_safety_range(self):
@@ -1053,7 +1056,9 @@ class LoadCellEndstop:
         raise self.printer.command_error("Not Implemented")
 
     def tapping_move(self, pos, speed):
-        return self._helper.tapping_move(self, pos, speed)
+        epos, is_valid = self._helper.tapping_move(self, pos, speed)
+        self.last_tap_is_valid = is_valid
+        return epos, is_valid
 
     def multi_probe_begin(self):
         self.multi = 'FIRST'
@@ -1075,16 +1080,38 @@ class LoadCellEndstop:
     def get_position_endstop(self):
         return self._position_endstop
 
+class LoadCellProbeCommandHelper:
+    def __init__(self, config, probe_session):
+        self.probe_session = probe_session
+        self.printer = config.get_printer()
+        self.register_commands()
+
+    def register_commands(self):
+        # Register commands
+        gcode = self.printer.lookup_object('gcode')
+        # for now there can only be 1 probe so no need for mux_command
+        gcode.register_command("LOAD_CELL_TAP",
+                               self.cmd_LOAD_CELL_TAP,
+                               desc=self.cmd_LOAD_CELL_TAP_help)
+
+    cmd_LOAD_CELL_TAP_help="Perform a single tap with no nozzle scrubbing"
+    def cmd_LOAD_CELL_TAP(self, gcmd):
+        speed = gcmd.get_float("PROBE_SPEED",
+                               self.probe_session.speed, above=0.)
+        self.probe_session.single_tap(speed)
+
 
 class LoadCellPrinterProbe:
-    def __init__(self, config, load_cell_inst, load_cell_endstop):
+    def __init__(self, config, load_cell_inst, load_cell_endstop,
+                 probe_session_context):
         self.printer = config.get_printer()
         self.mcu_probe = load_cell_endstop
         self._load_cell = load_cell_inst
-        self.cmd_helper = probe.ProbeCommandHelper(config, self,
-                                             self.mcu_probe.query_endstop)
         self.probe_offsets = probe.ProbeOffsetsHelper(config)
         self.probe_session = LoadCellProbeSessionHelper(config, self.mcu_probe)
+        self.cmd_helper = probe.ProbeCommandHelper(config, self,
+                                             self.mcu_probe.query_endstop)
+        LoadCellProbeCommandHelper(config, self.probe_session)
 
     # Copy of PrinterProbe methods
     def get_probe_params(self, gcmd=None):
@@ -1115,7 +1142,8 @@ def load_config(config):
     name = config.get_name().split()[-1]
     lc_name = 'load_cell' if name == "load_cell_probe" else 'load_cell ' + name
     printer.add_object(lc_name, lc)
-    lce = LoadCellEndstop(config, lc, ProbeSessionContext(config, lc))
-    lc_probe = LoadCellPrinterProbe(config, lc, lce)
+    psc = ProbeSessionContext(config, lc)
+    lce = LoadCellEndstop(config, lc, psc)
+    lc_probe = LoadCellPrinterProbe(config, lc, lce, psc)
     printer.add_object('probe', lc_probe)
     return lc_probe
