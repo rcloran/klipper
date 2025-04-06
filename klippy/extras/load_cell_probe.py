@@ -612,18 +612,18 @@ class LoadCellProbeSessionHelper:
                 'samples_result': samples_result}
 
     # execute nozzle cleaning routine
-    def clean_nozzle(self, retries):
-        #TODO: what params to pass to nozzle cleaners?
-        # [X,Y,Z] of the failed probe?
-        # original requested probe location
-        # how many times this has happened?
+    def clean_nozzle(self, retries, probe_pos):
         if self.nozzle_cleaner_module is not None:
-            self.nozzle_cleaner_module.clean_nozzle()
+            self.nozzle_cleaner_module.clean_nozzle(retries,
+                    self.bad_tap_retries, probe_pos)
         else:
             macro = self.nozzle_cleaner_gcode
             context = macro.create_template_context()
             context['params'] = {
                 'RETRIES': retries,
+                'RETRIES_REMAINING': self.bad_tap_retries - retries,
+                'ORIGINAL_PROBE_X': probe_pos[0],
+                'ORIGINAL_PROBE_Y': probe_pos[1]
             }
             macro.run_gcode_from_command(context)
 
@@ -649,12 +649,15 @@ class LoadCellProbeSessionHelper:
                            % (epos[0], epos[1], epos[2]))
         return epos[:3], is_good
 
-    def probe_cycle(self, probexy, params):
+    # probe until a single good sample is returned or retries are exhausted
+    def probe_cycle(self, params):
+        toolhead = self.printer.lookup_object('toolhead')
+        origin_pos = toolhead.get_position()
         epos, is_good = self.single_tap(params['probe_speed'])
         retries = 0
         while not is_good and retries < self.bad_tap_retries:
-            self.retract(probexy, epos, params)
-            self.clean_nozzle(retries)
+            self.retract(params)
+            self.clean_nozzle(retries, origin_pos)
             epos, is_good = self.single_tap(params['probe_speed'])
             retries += 1
         if not is_good:
@@ -663,24 +666,24 @@ class LoadCellProbeSessionHelper:
                                     %  (self.bad_tap_retries,))
         return epos
 
-    def retract(self, probexy, pos, params):
+    def retract(self, params):
+        # Note: retract at the current location, to allow nozzle cleaner
+        # to move the probing location to avoid a fouling
         toolhead = self.printer.lookup_object('toolhead')
-        toolhead.manual_move(
-            probexy + [pos[2] + params['sample_retract_dist']],
-            params['lift_speed'])
+        pos = toolhead.get_position()
+        pos[2] += params['sample_retract_dist']
+        toolhead.manual_move(pos, params['lift_speed'])
 
     def run_probe(self, gcmd):
         if not self.multi_probe_pending:
             self._probe_state_error()
         params = self.get_probe_params(gcmd)
-        toolhead = self.printer.lookup_object('toolhead')
-        probexy = toolhead.get_position()[:2]
         retries = 0
         positions = []
         sample_count = params['samples']
         while len(positions) < sample_count:
             # Probe position
-            pos = self.probe_cycle(probexy, params)
+            pos = self.probe_cycle(params)
             positions.append(pos)
             # Check samples tolerance
             z_positions = [p[2] for p in positions]
@@ -692,7 +695,7 @@ class LoadCellProbeSessionHelper:
                 positions = []
             # Retract
             if len(positions) < sample_count:
-                self.retract(probexy, pos, params)
+                self.retract(params)
         # Calculate result
         epos = probe.calc_probe_z_average(positions, params['samples_result'])
         self.results.append(epos)
