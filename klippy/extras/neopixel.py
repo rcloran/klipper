@@ -4,7 +4,7 @@
 #
 # This file may be distributed under the terms of the GNU GPLv3 license.
 import logging
-from . import led
+from . import bus, led
 
 BACKGROUND_PRIORITY_CLOCK = 0x7fffffff00000000
 
@@ -18,11 +18,20 @@ class PrinterNeoPixel:
         self.printer = printer = config.get_printer()
         self.mutex = printer.get_reactor().mutex()
         # Configure neopixel
-        ppins = printer.lookup_object('pins')
-        pin_params = ppins.lookup_pin(config.get('pin'))
-        self.mcu = pin_params['chip']
+        if config.get('pin', None) is not None:
+            self.comm_type = "bitbang"
+            ppins = printer.lookup_object('pins')
+            pin_params = ppins.lookup_pin(config.get('pin'))
+            self.mcu = pin_params['chip']
+            self.pin = pin_params['pin']
+        else:
+            self.comm_type = "spi"
+            # TODO: Check for speed in config?
+            self.spi = bus.MCU_SPI_from_config(config, 0, default_speed=8_000_000)
+            self.pin = self.spi.oid
+            self.mcu = self.spi.mcu
+
         self.oid = self.mcu.create_oid()
-        self.pin = pin_params['pin']
         self.mcu.register_config_callback(self.build_config)
         self.neopixel_update_cmd = self.neopixel_send_cmd = None
         # Build color map
@@ -50,9 +59,9 @@ class PrinterNeoPixel:
     def build_config(self):
         bmt = self.mcu.seconds_to_clock(BIT_MAX_TIME)
         rmt = self.mcu.seconds_to_clock(RESET_MIN_TIME)
-        self.mcu.add_config_cmd("config_neopixel oid=%d pin=%s data_size=%d"
+        self.mcu.add_config_cmd("config_neopixel oid=%d comm_type=%s comm_id=%s data_size=%d"
                                 " bit_max_ticks=%d reset_min_ticks=%d"
-                                % (self.oid, self.pin, len(self.color_data),
+                                % (self.oid, self.comm_type, self.pin, len(self.color_data),
                                    bmt, rmt))
         cmd_queue = self.mcu.alloc_command_queue()
         self.neopixel_update_cmd = self.mcu.lookup_command(

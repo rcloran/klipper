@@ -12,6 +12,9 @@
 #include "basecmd.h" // oid_alloc
 #include "command.h" // DECL_COMMAND
 #include "sched.h" // sched_shutdown
+#if CONFIG_HAVE_GPIO_SPI
+#include "spicmds.h" // spidev_transfer
+#endif
 
 // The WS2812 uses a bit-banging protocol where each bit is
 // transmitted as a gpio high pulse of variable length.  The various
@@ -87,32 +90,61 @@ neopixel_delay(neopixel_time_t start, neopixel_time_t ticks)
  ****************************************************************/
 
 struct neopixel_s {
+    uint8_t comm_type;
     struct gpio_out pin;
+#if CONFIG_HAVE_GPIO_SPI
+    struct spidev_s *spi;
+#endif
     neopixel_time_t bit_max_ticks;
     uint32_t last_req_time, reset_min_ticks;
     uint16_t data_size;
     uint8_t data[0];
 };
 
+enum {
+    BITBANG, SPI
+};
+
+DECL_ENUMERATION("comm_type", "bitbang", BITBANG);
+DECL_ENUMERATION("comm_type", "spi", SPI);
+
 void
 command_config_neopixel(uint32_t *args)
 {
-    struct gpio_out pin = gpio_out_setup(args[1], 0);
-    uint16_t data_size = args[2];
+    uint16_t data_size = args[3];
     if (data_size & 0x8000)
         shutdown("Invalid neopixel data_size");
     struct neopixel_s *n = oid_alloc(args[0], command_config_neopixel
                                      , sizeof(*n) + data_size);
-    n->pin = pin;
+
+    switch (args[1]) {
+        case BITBANG:
+            n->comm_type = BITBANG;
+            struct gpio_out pin = gpio_out_setup(args[2], 0);
+            n->pin = pin;
+            break;
+        case SPI:
+            if (!CONFIG_HAVE_GPIO_SPI) {
+                shutdown("spi unsupported by config");
+            }
+#if CONFIG_HAVE_GPIO_SPI
+            n->comm_type = SPI;
+            n->spi = spidev_oid_lookup(args[2]);
+#endif // HAVE_CONFIG_GPIO_SPI
+            break;
+        default:
+            shutdown("comm_type invalid");
+    }
+
     n->data_size = data_size;
-    n->bit_max_ticks = args[3];
-    n->reset_min_ticks = args[4];
+    n->bit_max_ticks = args[4];
+    n->reset_min_ticks = args[5];
 }
-DECL_COMMAND(command_config_neopixel, "config_neopixel oid=%c pin=%u"
-             " data_size=%hu bit_max_ticks=%u reset_min_ticks=%u");
+DECL_COMMAND(command_config_neopixel, "config_neopixel oid=%c comm_type=%c"
+             " comm_id=%u data_size=%hu bit_max_ticks=%u reset_min_ticks=%u");
 
 static int
-send_data(struct neopixel_s *n)
+send_data_bitbang(struct neopixel_s *n)
 {
     // Make sure the reset time has elapsed since last request
     uint32_t last_req_time = n->last_req_time, rmt = n->reset_min_ticks;
@@ -177,6 +209,44 @@ fail:
     return -1;
 }
 
+#if CONFIG_HAVE_GPIO_SPI
+static int
+send_data_spi(struct neopixel_s *n)
+{
+    // Make sure the reset time has elapsed since last request
+    uint32_t last_req_time = n->last_req_time, rmt = n->reset_min_ticks;
+    uint32_t cur = timer_read_time();
+    while (cur - last_req_time < rmt) {
+        irq_poll();
+        cur = timer_read_time();
+    }
+
+    // Transmit data
+    uint8_t *data = n->data;
+    uint_fast16_t data_len = n->data_size;
+    uint8_t msg[24] = {0};
+
+    while (data_len) {
+        for (uint_fast8_t i = 0; i < 3; i++) {
+            uint_fast8_t byte = *data++;
+            data_len--;
+            for (uint_fast8_t bit = 0; bit < 8; bit++) {
+                if (byte & 0x80) {
+                    msg[i * 8 + bit] = 0b01111000;
+                } else {
+                    msg[i * 8 + bit] = 0b01100000;
+                }
+                byte <<= 1;
+            }
+        }
+        spidev_transfer(n->spi, 0, sizeof(msg), msg);
+    }
+
+    n->last_req_time = timer_read_time();  // TODO: + transfer time?
+    return 0;
+}
+#endif // CONFIG_HAVE_GPIO_SPI
+
 void
 command_neopixel_update(uint32_t *args)
 {
@@ -197,7 +267,14 @@ command_neopixel_send(uint32_t *args)
 {
     uint8_t oid = args[0];
     struct neopixel_s *n = oid_lookup(oid, command_config_neopixel);
-    int ret = send_data(n);
+    int ret = 1;
+    if (n->comm_type == BITBANG) {
+        ret = send_data_bitbang(n);
+#if CONFIG_HAVE_GPIO_SPI
+    } else if (n->comm_type == SPI) {
+        ret = send_data_spi(n);
+#endif
+    }
     sendf("neopixel_result oid=%c success=%c", oid, ret ? 0 : 1);
 }
 DECL_COMMAND(command_neopixel_send, "neopixel_send oid=%c");

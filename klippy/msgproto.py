@@ -322,6 +322,7 @@ class MessageParser:
             self._error("Unknown command: %s", msgformat)
         return msgid
     def create_command(self, msg):
+        logging.info(">>> %s", msg)
         parts = msg.strip().split()
         if not parts:
             return []
